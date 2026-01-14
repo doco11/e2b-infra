@@ -68,6 +68,7 @@ type Config struct {
 	BuilderConfig
 
 	ClickhouseConnectionString string   `env:"CLICKHOUSE_CONNECTION_STRING"`
+	E2BLiteMode                bool     `env:"E2B_LITE_MODE"                envDefault:"false"`
 	ForceStop                  bool     `env:"FORCE_STOP"`
 	GRPCPort                   uint16   `env:"GRPC_PORT"                    envDefault:"5008"`
 	LaunchDarklyAPIKey         string   `env:"LAUNCH_DARKLY_API_KEY"`

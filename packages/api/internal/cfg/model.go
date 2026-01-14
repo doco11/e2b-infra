@@ -14,8 +14,10 @@ type Config struct {
 
 	ClickhouseConnectionString string `env:"CLICKHOUSE_CONNECTION_STRING"`
 
+	E2BLiteMode bool `env:"E2B_LITE_MODE" envDefault:"false"`
+
 	LokiPassword string `env:"LOKI_PASSWORD"`
-	LokiURL      string `env:"LOKI_URL,required"`
+	LokiURL      string `env:"LOKI_URL"` // Required in production, optional in lite mode
 	LokiUser     string `env:"LOKI_USER"`
 
 	NomadAddress string `env:"NOMAD_ADDRESS" envDefault:"http://localhost:4646"`
@@ -42,10 +44,20 @@ type Config struct {
 func Parse() (Config, error) {
 	var config Config
 	err := env.Parse(&config)
+	if err != nil {
+		return config, err
+	}
 
 	if config.DefaultKernelVersion == "" {
 		config.DefaultKernelVersion = DefaultKernelVersion
 	}
 
-	return config, err
+	// In lite mode, some required fields become optional
+	if !config.E2BLiteMode {
+		if config.LokiURL == "" {
+			return config, env.NotFoundError{Key: "LOKI_URL"}
+		}
+	}
+
+	return config, nil
 }
