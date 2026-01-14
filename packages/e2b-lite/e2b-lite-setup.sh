@@ -17,7 +17,7 @@ set -e
 #
 # Usage:
 #   # Download and run (from official repo)
-#   curl -fsSL https://raw.githubusercontent.com/doco11/infra/main/packages/e2b-lite/e2b-lite-setup.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/doco11/e2b-infra/refs/heads/main/packages/e2b-lite/e2b-lite-setup.sh | sudo bash
 #
 ################################################################################
 
@@ -29,6 +29,103 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 BOLD='\033[1m'
+
+################################################################################
+# Installation Logging
+################################################################################
+# Create a timestamped log file in the directory where the script is run from
+INSTALL_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+INSTALL_LOG_DIR="${E2B_LITE_LOG_DIR:-$(pwd)}"
+INSTALL_LOG_FILE="${INSTALL_LOG_DIR}/e2b-lite-install-${INSTALL_TIMESTAMP}.log"
+
+# Initialize log file
+init_log() {
+    mkdir -p "$INSTALL_LOG_DIR"
+    touch "$INSTALL_LOG_FILE"
+    {
+        echo "============================================================"
+        echo "E2B Lite Installation Log"
+        echo "============================================================"
+        echo "Started: $(date)"
+        echo "Log file: $INSTALL_LOG_FILE"
+        echo "User: $(whoami)"
+        echo "Working directory: $(pwd)"
+        echo "Hostname: $(hostname)"
+        echo "============================================================"
+        echo ""
+    } >> "$INSTALL_LOG_FILE"
+}
+
+# Log a message to the log file (no console output)
+log() {
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] $1" >> "$INSTALL_LOG_FILE"
+}
+
+# Log command output - use this to capture command output
+# Usage: run_logged "description" command args...
+run_logged() {
+    local description="$1"
+    shift
+    log "EXEC: $description"
+    log "CMD: $*"
+
+    # Create a temp file for output
+    local tmp_out=$(mktemp)
+    local exit_code=0
+
+    # Run command, capture stdout and stderr
+    if "$@" > "$tmp_out" 2>&1; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
+
+    # Log the output
+    if [ -s "$tmp_out" ]; then
+        log "OUTPUT:"
+        cat "$tmp_out" >> "$INSTALL_LOG_FILE"
+        log "END OUTPUT"
+    fi
+
+    log "EXIT CODE: $exit_code"
+    rm -f "$tmp_out"
+
+    return $exit_code
+}
+
+# Log command output silently (for commands that output to console)
+# This version doesn't suppress console output
+run_logged_verbose() {
+    local description="$1"
+    shift
+    log "EXEC: $description"
+    log "CMD: $*"
+
+    # Use tee to both display and capture output
+    local tmp_out=$(mktemp)
+    local exit_code=0
+
+    if "$@" 2>&1 | tee "$tmp_out"; then
+        exit_code=${PIPESTATUS[0]}
+    else
+        exit_code=${PIPESTATUS[0]}
+    fi
+
+    # Log the output
+    if [ -s "$tmp_out" ]; then
+        log "OUTPUT:"
+        cat "$tmp_out" >> "$INSTALL_LOG_FILE"
+        log "END OUTPUT"
+    fi
+
+    log "EXIT CODE: $exit_code"
+    rm -f "$tmp_out"
+
+    return $exit_code
+}
+
+# Initialize the log file
+init_log
 
 # Configuration - Override these with environment variables if needed
 E2B_LITE_DIR="${E2B_LITE_DIR:-/opt/e2b-lite}"
@@ -52,6 +149,8 @@ print_header() {
     echo -e "${CYAN}Setting up E2B Lite on your machine...${NC}"
     echo -e "${CYAN}This will install all dependencies, build binaries, and configure services.${NC}"
     echo ""
+    echo -e "${YELLOW}📝 Installation log: ${INSTALL_LOG_FILE}${NC}"
+    echo ""
 }
 
 step() {
@@ -59,22 +158,30 @@ step() {
     echo ""
     echo -e "${BOLD}${BLUE}━━━ Step $CURRENT_STEP/$TOTAL_STEPS: $1 ━━━${NC}"
     echo ""
+    log ""
+    log "========================================"
+    log "STEP $CURRENT_STEP/$TOTAL_STEPS: $1"
+    log "========================================"
 }
 
 success() {
     echo -e "${GREEN}✓${NC} $1"
+    log "[SUCCESS] $1"
 }
 
 info() {
     echo -e "${CYAN}→${NC} $1"
+    log "[INFO] $1"
 }
 
 warning() {
     echo -e "${YELLOW}⚠${NC} $1"
+    log "[WARNING] $1"
 }
 
 error() {
     echo -e "${RED}✗${NC} $1"
+    log "[ERROR] $1"
 }
 
 # Check if running as root
@@ -91,10 +198,24 @@ print_header
 ################################################################################
 step "Checking System Requirements"
 
+# Log system information for debugging
+log "=== System Information ==="
+log "Kernel: $(uname -r)"
+log "Architecture: $(uname -m)"
+log "CPU info:"
+head -30 /proc/cpuinfo >> "$INSTALL_LOG_FILE" 2>/dev/null || true
+log "Memory info:"
+free -h >> "$INSTALL_LOG_FILE" 2>/dev/null || true
+log "Disk info:"
+df -h >> "$INSTALL_LOG_FILE" 2>/dev/null || true
+log "=== End System Information ==="
+
 # OS Check
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     success "OS: $NAME $VERSION"
+    log "OS Release file contents:"
+    cat /etc/os-release >> "$INSTALL_LOG_FILE"
 
     if [[ "$ID" != "ubuntu" && "$ID" != "debian" && "$ID" != "fedora" ]]; then
         warning "Tested on Ubuntu/Debian. Your OS ($NAME) may work but is untested."
@@ -143,33 +264,40 @@ if command -v apt-get &> /dev/null; then
     info "Package manager: apt-get"
 
     info "Updating package list..."
-    apt-get update -qq
+    log "Running: apt-get update"
+    if apt-get update -qq >> "$INSTALL_LOG_FILE" 2>&1; then
+        log "apt-get update completed successfully"
+    else
+        log "apt-get update had warnings/errors (continuing anyway)"
+    fi
 
     info "Installing essential packages..."
+    log "Packages to install: curl git wget ca-certificates gnupg build-essential software-properties-common apt-transport-https lsb-release"
+
     # Try to install packages, with fallback for mirror issues
-    if ! apt-get install -y -qq curl git wget ca-certificates gnupg build-essential \
-        software-properties-common apt-transport-https lsb-release > /dev/null 2>&1; then
+    if apt-get install -y curl git wget ca-certificates gnupg build-essential \
+        software-properties-common apt-transport-https lsb-release >> "$INSTALL_LOG_FILE" 2>&1; then
+        log "Package installation completed successfully"
+    else
         warning "Initial install failed, trying with --fix-missing..."
-        if ! apt-get install -y -qq --fix-missing curl git wget ca-certificates gnupg build-essential \
-            software-properties-common apt-transport-https lsb-release > /dev/null 2>&1; then
-            warning "Still failed, trying linux-libc-dev workaround..."
-            # Common issue: latest linux-libc-dev not available on mirrors
-            # Install previous version if available
-            PREV_VERSION=$(apt-cache policy linux-libc-dev | grep -A1 "Version table" | tail -1 | awk '{print $1}')
-            if [ -n "$PREV_VERSION" ]; then
-                apt-get install -y -qq linux-libc-dev=$PREV_VERSION > /dev/null 2>&1 || true
-            fi
-            # Try again
-            apt-get install -y -qq curl git wget ca-certificates gnupg build-essential \
-                software-properties-common apt-transport-https lsb-release > /dev/null 2>&1
+        log "First install attempt failed, trying --fix-missing"
+        if apt-get install -y --fix-missing curl git wget ca-certificates gnupg build-essential \
+            software-properties-common apt-transport-https lsb-release >> "$INSTALL_LOG_FILE" 2>&1; then
+            log "Package installation with --fix-missing completed"
+        else
+            log "Package installation failed after all attempts"
+            error "Failed to install system dependencies. Check log: $INSTALL_LOG_FILE"
+            exit 1
         fi
     fi
 
 elif command -v dnf &> /dev/null; then
     PKG_MANAGER="dnf"
     info "Package manager: dnf"
-    dnf check-update -q || true
-    dnf install -y -q curl git wget ca-certificates gnupg gcc make
+    log "Running: dnf check-update"
+    dnf check-update -q >> "$INSTALL_LOG_FILE" 2>&1 || true
+    log "Running: dnf install packages"
+    dnf install -y curl git wget ca-certificates gnupg gcc make >> "$INSTALL_LOG_FILE" 2>&1
 
 else
     error "Unsupported package manager. Please install manually."
@@ -184,20 +312,34 @@ success "System dependencies installed"
 step "Installing Docker"
 
 if command -v docker &> /dev/null; then
-    success "Docker already installed: $(docker --version | awk '{print $3}')"
+    DOCKER_VERSION=$(docker --version | awk '{print $3}')
+    success "Docker already installed: $DOCKER_VERSION"
+    log "Docker version: $DOCKER_VERSION"
+    log "Docker info:"
+    docker info >> "$INSTALL_LOG_FILE" 2>&1 || true
 else
     info "Downloading and installing Docker..."
-    curl -fsSL https://get.docker.com | sh > /dev/null 2>&1
-    systemctl enable docker > /dev/null 2>&1
-    systemctl start docker
+    log "Installing Docker via get.docker.com script"
+    if curl -fsSL https://get.docker.com | sh >> "$INSTALL_LOG_FILE" 2>&1; then
+        log "Docker installation script completed"
+    else
+        log "Docker installation script had errors"
+        error "Docker installation failed. Check log: $INSTALL_LOG_FILE"
+        exit 1
+    fi
+    log "Enabling Docker service"
+    systemctl enable docker >> "$INSTALL_LOG_FILE" 2>&1
+    systemctl start docker >> "$INSTALL_LOG_FILE" 2>&1
     success "Docker installed successfully"
 fi
 
 # Test Docker
-if docker ps > /dev/null 2>&1; then
+log "Testing Docker daemon"
+if docker ps >> "$INSTALL_LOG_FILE" 2>&1; then
     success "Docker is running"
 else
     error "Docker daemon not running"
+    log "Docker ps failed - daemon may not be running"
     exit 1
 fi
 
@@ -208,12 +350,18 @@ step "Installing Go $GO_VERSION"
 
 if command -v go &> /dev/null; then
     INSTALLED_GO=$(go version | awk '{print $3}' | sed 's/go//')
+    log "Existing Go version found: $INSTALLED_GO"
     if [ "$INSTALLED_GO" = "$GO_VERSION" ]; then
         success "Go $GO_VERSION already installed"
     else
         warning "Go $INSTALLED_GO installed (need $GO_VERSION), upgrading..."
+        log "DESTRUCTIVE: Removing existing Go installation at /usr/local/go"
+        log "Previous Go version: $INSTALLED_GO"
         rm -rf /usr/local/go
+        log "Removed /usr/local/go"
     fi
+else
+    log "No existing Go installation found"
 fi
 
 if ! command -v go &> /dev/null || [ "$INSTALLED_GO" != "$GO_VERSION" ]; then
@@ -229,12 +377,24 @@ if ! command -v go &> /dev/null || [ "$INSTALLED_GO" != "$GO_VERSION" ]; then
         exit 1
     fi
 
-    wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
-    tar -C /usr/local -xzf "go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
-    rm "go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+    GO_TARBALL="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+    log "Downloading: https://go.dev/dl/$GO_TARBALL"
+    if wget -q "https://go.dev/dl/$GO_TARBALL" >> "$INSTALL_LOG_FILE" 2>&1; then
+        log "Download completed"
+    else
+        log "Download failed"
+        error "Failed to download Go. Check log: $INSTALL_LOG_FILE"
+        exit 1
+    fi
+
+    log "Extracting Go to /usr/local"
+    tar -C /usr/local -xzf "$GO_TARBALL" >> "$INSTALL_LOG_FILE" 2>&1
+    rm "$GO_TARBALL"
+    log "Extraction complete, tarball removed"
 
     # Add to PATH
     if ! grep -q "/usr/local/go/bin" /root/.bashrc; then
+        log "Adding /usr/local/go/bin to /root/.bashrc PATH"
         echo 'export PATH=$PATH:/usr/local/go/bin' >> /root/.bashrc
     fi
     export PATH=$PATH:/usr/local/go/bin
@@ -243,10 +403,12 @@ if ! command -v go &> /dev/null || [ "$INSTALLED_GO" != "$GO_VERSION" ]; then
 fi
 
 # Verify Go installation
-if go version > /dev/null 2>&1; then
+log "Verifying Go installation"
+if go version >> "$INSTALL_LOG_FILE" 2>&1; then
     success "Go is working: $(go version | awk '{print $3}')"
 else
     error "Go installation failed"
+    log "Go verification failed"
     exit 1
 fi
 
@@ -256,46 +418,59 @@ fi
 step "Enabling KVM and NBD Modules"
 
 # Load KVM module
+log "Current loaded modules:"
+lsmod | grep -E "(kvm|nbd)" >> "$INSTALL_LOG_FILE" 2>&1 || log "No kvm/nbd modules currently loaded"
+
 if ! lsmod | grep -q kvm; then
     info "Loading KVM module..."
     if grep -q "vmx" /proc/cpuinfo; then
-        modprobe kvm_intel
+        log "Loading kvm_intel module"
+        modprobe kvm_intel >> "$INSTALL_LOG_FILE" 2>&1
         success "Loaded kvm_intel"
     elif grep -q "svm" /proc/cpuinfo; then
-        modprobe kvm_amd
+        log "Loading kvm_amd module"
+        modprobe kvm_amd >> "$INSTALL_LOG_FILE" 2>&1
         success "Loaded kvm_amd"
     fi
-    modprobe kvm
+    modprobe kvm >> "$INSTALL_LOG_FILE" 2>&1
 else
     success "KVM module already loaded"
 fi
 
 # Load NBD module
 info "Loading NBD module with 64 devices..."
-modprobe nbd nbds_max=64
+log "Loading nbd module with nbds_max=64"
+modprobe nbd nbds_max=64 >> "$INSTALL_LOG_FILE" 2>&1
 success "NBD module loaded"
 
 # Make persistent
 info "Making modules persistent across reboots..."
+log "SYSTEM CHANGE: Creating /etc/modules-load.d/e2b-lite.conf"
 cat > /etc/modules-load.d/e2b-lite.conf <<EOF
 kvm
 $(grep -q "vmx" /proc/cpuinfo && echo "kvm_intel" || echo "kvm_amd")
 nbd
 EOF
+log "Contents of /etc/modules-load.d/e2b-lite.conf:"
+cat /etc/modules-load.d/e2b-lite.conf >> "$INSTALL_LOG_FILE"
 
 # Setup udev rule for NBD
+log "SYSTEM CHANGE: Creating /etc/udev/rules.d/97-nbd-device.rules"
 cat > /etc/udev/rules.d/97-nbd-device.rules <<EOF
 # Disable inotify watching of change events for NBD devices
 ACTION=="add|change", KERNEL=="nbd*", OPTIONS:="nowatch"
 EOF
-udevadm control --reload-rules > /dev/null 2>&1
-udevadm trigger > /dev/null 2>&1
+log "Reloading udev rules"
+udevadm control --reload-rules >> "$INSTALL_LOG_FILE" 2>&1
+udevadm trigger >> "$INSTALL_LOG_FILE" 2>&1
 
 # Setup KVM permissions
 if [ -e /dev/kvm ]; then
     if ! getent group kvm > /dev/null; then
+        log "Creating kvm group"
         groupadd kvm
     fi
+    log "Setting /dev/kvm permissions: root:kvm 660"
     chown root:kvm /dev/kvm
     chmod 660 /dev/kvm
     success "KVM permissions configured"
@@ -308,16 +483,25 @@ step "Configuring System Settings"
 
 # Enable huge pages
 info "Enabling huge pages (512 pages = ~1GB)..."
-sysctl -w vm.nr_hugepages=512 > /dev/null
+log "SYSTEM CHANGE: Setting vm.nr_hugepages=512"
+log "Current huge pages: $(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 'unknown')"
+sysctl -w vm.nr_hugepages=512 >> "$INSTALL_LOG_FILE" 2>&1
 if ! grep -q "vm.nr_hugepages" /etc/sysctl.conf 2>/dev/null; then
+    log "SYSTEM CHANGE: Appending vm.nr_hugepages=512 to /etc/sysctl.conf"
     echo "vm.nr_hugepages=512" >> /etc/sysctl.conf
+else
+    log "vm.nr_hugepages already exists in /etc/sysctl.conf"
 fi
 success "Huge pages configured"
 
 # Other kernel parameters for better performance
 info "Setting kernel parameters for Firecracker..."
-sysctl -w net.core.somaxconn=65535 > /dev/null
-sysctl -w net.ipv4.tcp_max_syn_backlog=65535 > /dev/null
+log "SYSTEM CHANGE: Setting net.core.somaxconn=65535"
+log "Current somaxconn: $(cat /proc/sys/net/core/somaxconn 2>/dev/null || echo 'unknown')"
+sysctl -w net.core.somaxconn=65535 >> "$INSTALL_LOG_FILE" 2>&1
+log "SYSTEM CHANGE: Setting net.ipv4.tcp_max_syn_backlog=65535"
+log "Current tcp_max_syn_backlog: $(cat /proc/sys/net/ipv4/tcp_max_syn_backlog 2>/dev/null || echo 'unknown')"
+sysctl -w net.ipv4.tcp_max_syn_backlog=65535 >> "$INSTALL_LOG_FILE" 2>&1
 success "Kernel parameters set"
 
 ################################################################################
@@ -437,18 +621,24 @@ fi
 step "Building envd (in-VM daemon)"
 
 cd "$E2B_LITE_DIR/packages/envd"
+log "Working directory: $(pwd)"
 
 info "Building envd binary..."
-if make build > /dev/null 2>&1; then
+log "Running: make build"
+if make build >> "$INSTALL_LOG_FILE" 2>&1; then
     if [ -f "bin/envd" ]; then
         cp bin/envd "$E2B_LITE_DATA_DIR/envd/"
+        log "Copied bin/envd to $E2B_LITE_DATA_DIR/envd/"
         success "envd built and copied to $E2B_LITE_DATA_DIR/envd/"
     else
         error "envd binary not found after build"
+        log "ERROR: bin/envd not found after successful make build"
+        ls -la bin/ >> "$INSTALL_LOG_FILE" 2>&1 || true
         exit 1
     fi
 else
-    error "envd build failed"
+    error "envd build failed. Check log: $INSTALL_LOG_FILE"
+    log "ERROR: make build failed for envd"
     exit 1
 fi
 
@@ -458,19 +648,26 @@ fi
 step "Building Orchestrator"
 
 cd "$E2B_LITE_DIR/packages/orchestrator"
+log "Working directory: $(pwd)"
 
 info "Building orchestrator binary (this may take a few minutes)..."
 export CGO_ENABLED=0
-if make build > /dev/null 2>&1; then
+log "CGO_ENABLED=0"
+log "Running: make build"
+if make build >> "$INSTALL_LOG_FILE" 2>&1; then
     if [ -f "bin/orchestrator" ]; then
         success "Orchestrator built successfully"
         info "Binary location: $(pwd)/bin/orchestrator"
+        log "Orchestrator binary size: $(ls -lh bin/orchestrator | awk '{print $5}')"
     else
         error "Orchestrator binary not found after build"
+        log "ERROR: bin/orchestrator not found after successful make build"
+        ls -la bin/ >> "$INSTALL_LOG_FILE" 2>&1 || true
         exit 1
     fi
 else
-    error "Orchestrator build failed"
+    error "Orchestrator build failed. Check log: $INSTALL_LOG_FILE"
+    log "ERROR: make build failed for orchestrator"
     exit 1
 fi
 
@@ -480,19 +677,26 @@ fi
 step "Building API Server"
 
 cd "$E2B_LITE_DIR/packages/api"
+log "Working directory: $(pwd)"
 
 info "Building API binary (this may take a few minutes)..."
 export CGO_ENABLED=0
-if make build > /dev/null 2>&1; then
+log "CGO_ENABLED=0"
+log "Running: make build"
+if make build >> "$INSTALL_LOG_FILE" 2>&1; then
     if [ -f "bin/api" ]; then
         success "API built successfully"
         info "Binary location: $(pwd)/bin/api"
+        log "API binary size: $(ls -lh bin/api | awk '{print $5}')"
     else
         error "API binary not found after build"
+        log "ERROR: bin/api not found after successful make build"
+        ls -la bin/ >> "$INSTALL_LOG_FILE" 2>&1 || true
         exit 1
     fi
 else
-    error "API build failed"
+    error "API build failed. Check log: $INSTALL_LOG_FILE"
+    log "ERROR: make build failed for api"
     exit 1
 fi
 
@@ -584,14 +788,19 @@ fi
 step "Running Database Migrations"
 
 cd "$E2B_LITE_DIR/packages/db"
+log "Working directory: $(pwd)"
 
 info "Running database migrations..."
 export POSTGRES_CONNECTION_STRING="postgres://postgres:e2b_lite_password@localhost:5432/e2b_lite?sslmode=disable"
+log "POSTGRES_CONNECTION_STRING set (password redacted in log)"
+log "Running: make migrate-local"
 
-if make migrate-local > /dev/null 2>&1; then
+if make migrate-local >> "$INSTALL_LOG_FILE" 2>&1; then
     success "Database migrations completed"
+    log "Database migrations completed successfully"
 else
     warning "Database migrations had issues (this might be okay if DB is already set up)"
+    log "WARNING: make migrate-local returned non-zero exit code"
 fi
 
 ################################################################################
@@ -767,6 +976,33 @@ echo "  ⚠  Orchestrator must run as root (for Firecracker/KVM access)"
 echo "  ⚠  Default API key: e2b_lite_default_key (change for production!)"
 echo "  ⚠  Database password: e2b_lite_password (change for production!)"
 echo ""
+echo -e "${BOLD}${CYAN}📝 Installation Log${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "  Log file: $INSTALL_LOG_FILE"
+echo "  View with: cat $INSTALL_LOG_FILE"
+echo "  Tail with: tail -100 $INSTALL_LOG_FILE"
+echo ""
 echo -e "${BOLD}${GREEN}Installation completed successfully!${NC}"
 echo -e "${GREEN}E2B Lite is ready to use.${NC}"
 echo ""
+
+# Write final summary to log
+log ""
+log "============================================================"
+log "Installation completed successfully"
+log "============================================================"
+log "End time: $(date)"
+log "Duration: Script started at $INSTALL_TIMESTAMP"
+log ""
+log "Installed components:"
+log "  - Docker: $(docker --version 2>/dev/null || echo 'not found')"
+log "  - Go: $(go version 2>/dev/null || echo 'not found')"
+log "  - Firecracker: $FIRECRACKER_VERSION"
+log "  - API binary: $E2B_LITE_DIR/packages/api/bin/api"
+log "  - Orchestrator binary: $E2B_LITE_DIR/packages/orchestrator/bin/orchestrator"
+log "  - envd binary: $E2B_LITE_DATA_DIR/envd/envd"
+log ""
+log "Data directory: $E2B_LITE_DATA_DIR"
+log "Repository: $E2B_LITE_DIR"
+log "============================================================"
