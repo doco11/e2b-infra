@@ -1,6 +1,10 @@
 package cfg
 
-import "github.com/caarlos0/env/v11"
+import (
+	"fmt"
+
+	"github.com/caarlos0/env/v11"
+)
 
 const (
 	DefaultKernelVersion = "vmlinux-6.1.158"
@@ -55,7 +59,7 @@ func Parse() (Config, error) {
 	// In lite mode, some required fields become optional
 	if !config.E2BLiteMode {
 		if config.LokiURL == "" {
-			return config, env.NotFoundError{Key: "LOKI_URL"}
+			return config, fmt.Errorf("environment variable LOKI_URL is required when E2B_LITE_MODE is not enabled")
 		}
 	}
 
