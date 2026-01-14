@@ -721,8 +721,8 @@ services:
     container_name: e2b-lite-postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: e2b_lite_password
-      POSTGRES_DB: e2b_lite
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
     ports:
       - "5432:5432"
     volumes:
@@ -791,8 +791,6 @@ cd "$E2B_LITE_DIR/packages/db"
 log "Working directory: $(pwd)"
 
 info "Running database migrations..."
-export POSTGRES_CONNECTION_STRING="postgres://postgres:e2b_lite_password@localhost:5432/e2b_lite?sslmode=disable"
-log "POSTGRES_CONNECTION_STRING set (password redacted in log)"
 log "Running: make migrate-local"
 
 if make migrate-local >> "$INSTALL_LOG_FILE" 2>&1; then
@@ -821,8 +819,10 @@ cat > "$E2B_LITE_DIR/packages/api/start-api.sh" <<'EOAPI'
 cd "$(dirname "$0")"
 export E2B_LITE_MODE=true
 export ENVIRONMENT=local
-export POSTGRES_CONNECTION_STRING="postgres://postgres:e2b_lite_password@localhost:5432/e2b_lite?sslmode=disable"
+export NODE_ID="e2b-lite-local"
+export POSTGRES_CONNECTION_STRING="postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
 export REDIS_URL="localhost:6379"
+export SANDBOX_ACCESS_TOKEN_HASH_SEED="e2b-lite-local-seed-change-in-production"
 export LOKI_URL=""
 export POSTHOG_API_KEY=""
 export LAUNCHDARKLY_SDK_KEY=""
@@ -836,6 +836,7 @@ cat > "$E2B_LITE_DIR/packages/orchestrator/start-orchestrator.sh" <<'EOORCHESTRA
 cd "$(dirname "$0")"
 export E2B_LITE_MODE=true
 export ENVIRONMENT=local
+export NODE_ID="e2b-lite-local"
 export STORAGE_PROVIDER=Local
 export LOCAL_TEMPLATE_STORAGE_BASE_PATH=/var/e2b-lite/templates
 export LOCAL_BUILD_CACHE_STORAGE_BASE_PATH=/var/e2b-lite/build-cache
@@ -922,21 +923,6 @@ echo ""
 echo -e "${BOLD}${CYAN}🚀 Starting E2B Lite${NC}"
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo -e "${BOLD}Option 1: Manual Start (for testing/debugging)${NC}"
-echo ""
-echo "  # Terminal 1 - Start API"
-echo "  cd $E2B_LITE_DIR/packages/api"
-echo "  ./start-api.sh"
-echo ""
-echo "  # Terminal 2 - Start Orchestrator (needs root for Firecracker)"
-echo "  cd $E2B_LITE_DIR/packages/orchestrator"
-echo "  sudo ./start-orchestrator.sh"
-echo ""
-echo -e "${BOLD}Option 2: Use systemd services${NC}"
-echo ""
-echo "  sudo systemctl start e2b-lite-api"
-echo "  sudo systemctl start e2b-lite-orchestrator"
-echo ""
 echo "  # Enable to start on boot"
 echo "  sudo systemctl enable e2b-lite-api"
 echo "  sudo systemctl enable e2b-lite-orchestrator"
@@ -957,13 +943,6 @@ echo "  export E2B_API_KEY='e2b_lite_default_key'"
 echo "  python3 -c \"from e2b_code_interpreter import Sandbox; s = Sandbox(); print('Success!')\""
 echo ""
 echo -e "${BOLD}${CYAN}📚 Documentation${NC}"
-echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-echo "  README: $E2B_LITE_DIR/packages/e2b-lite/README.md"
-echo "  Integration Guide: $E2B_LITE_DIR/packages/e2b-lite/LITE_MODE_INTEGRATION.md"
-echo "  Status: $E2B_LITE_DIR/packages/e2b-lite/STATUS.md"
-echo ""
-echo -e "${BOLD}${YELLOW}⚠️  Important Notes${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 if [ ! -f "$E2B_LITE_DATA_DIR/kernels/$KERNEL_VERSION" ]; then
@@ -974,14 +953,12 @@ if [ ! -f "$E2B_LITE_DATA_DIR/kernels/$KERNEL_VERSION" ]; then
 fi
 echo "  ⚠  Orchestrator must run as root (for Firecracker/KVM access)"
 echo "  ⚠  Default API key: e2b_lite_default_key (change for production!)"
-echo "  ⚠  Database password: e2b_lite_password (change for production!)"
+echo "  ⚠  Database password: postgres (change for production!)"
 echo ""
 echo -e "${BOLD}${CYAN}📝 Installation Log${NC}"
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo "  Log file: $INSTALL_LOG_FILE"
-echo "  View with: cat $INSTALL_LOG_FILE"
-echo "  Tail with: tail -100 $INSTALL_LOG_FILE"
 echo ""
 echo -e "${BOLD}${GREEN}Installation completed successfully!${NC}"
 echo -e "${GREEN}E2B Lite is ready to use.${NC}"
