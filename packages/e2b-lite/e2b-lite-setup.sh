@@ -132,9 +132,9 @@ E2B_LITE_DIR="${E2B_LITE_DIR:-/opt/e2b-lite}"
 E2B_LITE_DATA_DIR="${E2B_LITE_DATA_DIR:-/var/e2b-lite}"
 E2B_REPO_URL="${E2B_REPO_URL:-https://github.com/doco11/e2b-infra.git}"
 E2B_BRANCH="${E2B_BRANCH:-main}"
-GO_VERSION="1.23.4"
-FIRECRACKER_VERSION="v1.10.1"
-KERNEL_VERSION="vmlinux-6.1"
+GO_VERSION="1.25.5"
+FIRECRACKER_VERSION="v1.13.1"
+KERNEL_VERSION="vmlinux-6.1.158"
 
 # Progress tracking
 TOTAL_STEPS=15
@@ -596,23 +596,35 @@ fi
 ################################################################################
 step "Downloading Linux Kernel for Firecracker"
 
-cd "$E2B_LITE_DATA_DIR/kernels"
+# Kernel is stored at: {HOST_KERNELS_DIR}/{version}/vmlinux.bin
+KERNEL_DIR="$E2B_LITE_DATA_DIR/kernels/${KERNEL_VERSION}"
+KERNEL_FILE="$KERNEL_DIR/vmlinux.bin"
+KERNEL_URL="https://storage.googleapis.com/e2b-prod-public-builds/kernels/${KERNEL_VERSION}/vmlinux.bin"
+
+mkdir -p "$KERNEL_DIR"
 
 # Check if kernel exists
-if [ -f "$KERNEL_VERSION" ]; then
-    success "Kernel already exists: $KERNEL_VERSION"
+if [ -f "$KERNEL_FILE" ]; then
+    success "Kernel already exists: $KERNEL_FILE"
 else
-    info "Downloading kernel from E2B public storage..."
+    info "Downloading kernel ${KERNEL_VERSION} from E2B public storage..."
+    log "Kernel URL: $KERNEL_URL"
 
-    # Try to download from E2B's public bucket
-    # Note: This is a placeholder - you'll need to provide actual kernel URLs
-    warning "Kernel download not fully implemented yet"
-    warning "You'll need to provide a Linux kernel at: $E2B_LITE_DATA_DIR/kernels/$KERNEL_VERSION"
-    warning "You can build your own or use E2B's public kernels"
-
-    # For now, create a placeholder
-    touch "$KERNEL_VERSION.placeholder"
-    warning "Created placeholder - replace with actual kernel before running"
+    if wget -q --show-progress -O "$KERNEL_FILE" "$KERNEL_URL" 2>&1 | tee -a "$INSTALL_LOG_FILE"; then
+        if [ -s "$KERNEL_FILE" ]; then
+            chmod 755 "$KERNEL_FILE"
+            success "Kernel downloaded: $KERNEL_FILE ($(du -h "$KERNEL_FILE" | cut -f1))"
+        else
+            rm -f "$KERNEL_FILE"
+            error "Downloaded kernel file is empty"
+            warning "You'll need to provide a Linux kernel at: $KERNEL_FILE"
+        fi
+    else
+        rm -f "$KERNEL_FILE" 2>/dev/null
+        warning "Failed to download kernel from E2B public storage"
+        warning "You'll need to provide a Linux kernel at: $KERNEL_FILE"
+        warning "You can build your own or use E2B's public kernels"
+    fi
 fi
 
 ################################################################################
@@ -713,11 +725,9 @@ cd "$E2B_LITE_DIR/packages/e2b-lite"
 if [ ! -f "docker-compose.lite.yml" ]; then
     info "Creating docker-compose.lite.yml..."
     cat > docker-compose.lite.yml <<'COMPOSE_EOF'
-version: '3.8'
-
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: e2b-lite-postgres
     environment:
       POSTGRES_USER: postgres
@@ -945,9 +955,9 @@ echo ""
 echo -e "${BOLD}${CYAN}📚 Documentation${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-if [ ! -f "$E2B_LITE_DATA_DIR/kernels/$KERNEL_VERSION" ]; then
+if [ ! -f "$E2B_LITE_DATA_DIR/kernels/$KERNEL_VERSION/vmlinux.bin" ]; then
     echo "  ⚠  Linux kernel needs to be provided"
-    echo "     Location: $E2B_LITE_DATA_DIR/kernels/$KERNEL_VERSION"
+    echo "     Location: $E2B_LITE_DATA_DIR/kernels/$KERNEL_VERSION/vmlinux.bin"
     echo "     You can build your own or contact E2B for kernel files"
     echo ""
 fi
