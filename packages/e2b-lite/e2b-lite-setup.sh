@@ -137,7 +137,7 @@ FIRECRACKER_VERSION="v1.13.1"
 KERNEL_VERSION="vmlinux-6.1.158"
 
 # Progress tracking
-TOTAL_STEPS=15
+TOTAL_STEPS=16
 CURRENT_STEP=0
 
 print_header() {
@@ -438,9 +438,9 @@ else
 fi
 
 # Load NBD module
-info "Loading NBD module with 64 devices..."
-log "Loading nbd module with nbds_max=64"
-modprobe nbd nbds_max=64 >> "$INSTALL_LOG_FILE" 2>&1
+info "Loading NBD module with 128 devices..."
+log "Loading nbd module with nbds_max=128"
+modprobe nbd nbds_max=128 >> "$INSTALL_LOG_FILE" 2>&1
 success "NBD module loaded"
 
 # Make persistent
@@ -812,6 +812,63 @@ else
 fi
 
 ################################################################################
+# Step 16: Seed Database
+################################################################################
+step "Seeding Database with Default User and API Key"
+
+cd "$E2B_LITE_DIR/packages/shared"
+log "Working directory: $(pwd)"
+
+info "Building seed-db tool..."
+log "Building seed-db tool from packages/shared/scripts/seed/postgres/seed-db.go"
+
+# Build the seed-db tool
+if go build -o seed-db ./scripts/seed/postgres/seed-db.go >> "$INSTALL_LOG_FILE" 2>&1; then
+    success "seed-db tool built"
+else
+    error "Failed to build seed-db tool. Check log: $INSTALL_LOG_FILE"
+    exit 1
+fi
+
+info "Seeding database with default e2b-lite user..."
+log "Running seed-db with email: e2b-lite@localhost"
+
+# Run the seed-db tool with piped input for email
+# Capture output to extract the generated API key
+SEED_OUTPUT=$(echo "e2b-lite@localhost" | POSTGRES_CONNECTION_STRING="postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" ./seed-db 2>&1)
+SEED_EXIT_CODE=$?
+
+log "seed-db output:"
+log "$SEED_OUTPUT"
+log "seed-db exit code: $SEED_EXIT_CODE"
+
+if [ $SEED_EXIT_CODE -eq 0 ]; then
+    success "Database seeded successfully"
+
+    # Extract the API key from the output
+    E2B_LITE_API_KEY=$(echo "$SEED_OUTPUT" | grep "Team API Key:" | awk '{print $4}')
+    E2B_LITE_ACCESS_TOKEN=$(echo "$SEED_OUTPUT" | grep "Access Token:" | awk '{print $3}')
+    E2B_LITE_TEAM_ID=$(echo "$SEED_OUTPUT" | grep "Team ID:" | awk '{print $3}')
+
+    if [ -n "$E2B_LITE_API_KEY" ]; then
+        success "API Key generated: $E2B_LITE_API_KEY"
+        log "Generated API Key: $E2B_LITE_API_KEY"
+
+        # Store the API key in a file for reference
+        echo "$E2B_LITE_API_KEY" > "$E2B_LITE_DATA_DIR/api-key.txt"
+        chmod 600 "$E2B_LITE_DATA_DIR/api-key.txt"
+        info "API key saved to: $E2B_LITE_DATA_DIR/api-key.txt"
+    fi
+else
+    warning "Database seeding had issues. You may need to run it manually."
+    warning "See: cd $E2B_LITE_DIR/packages/shared && make seed-db"
+    log "WARNING: seed-db returned non-zero exit code"
+fi
+
+# Clean up the seed-db binary
+rm -f ./seed-db
+
+################################################################################
 # Final Setup and Configuration
 ################################################################################
 echo ""
@@ -836,7 +893,7 @@ export SANDBOX_ACCESS_TOKEN_HASH_SEED="e2b-lite-local-seed-change-in-production"
 export LOKI_URL=""
 export POSTHOG_API_KEY=""
 export LAUNCHDARKLY_SDK_KEY=""
-./bin/api
+./bin/api -port 3000
 EOAPI
 chmod +x "$E2B_LITE_DIR/packages/api/start-api.sh"
 
@@ -949,8 +1006,13 @@ echo "  curl http://localhost:3000/health"
 echo ""
 echo "  # Use with E2B SDK (Python)"
 echo "  export E2B_API_URL='http://localhost:3000'"
-echo "  export E2B_API_KEY='e2b_lite_default_key'"
-echo "  python3 -c \"from e2b_code_interpreter import Sandbox; s = Sandbox(); print('Success!')\""
+if [ -n "$E2B_LITE_API_KEY" ]; then
+    echo "  export E2B_API_KEY='$E2B_LITE_API_KEY'"
+else
+    echo "  export E2B_API_KEY=\$(cat $E2B_LITE_DATA_DIR/api-key.txt)"
+fi
+echo "  pip install e2b-code-interpreter"
+echo "  python3 -c 'from e2b_code_interpreter import Sandbox; s = Sandbox(); print(s.run_code(\"1+1\").text)'"
 echo ""
 echo -e "${BOLD}${CYAN}📚 Documentation${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -962,7 +1024,11 @@ if [ ! -f "$E2B_LITE_DATA_DIR/kernels/$KERNEL_VERSION/vmlinux.bin" ]; then
     echo ""
 fi
 echo "  ⚠  Orchestrator must run as root (for Firecracker/KVM access)"
-echo "  ⚠  Default API key: e2b_lite_default_key (change for production!)"
+if [ -n "$E2B_LITE_API_KEY" ]; then
+    echo "  ✓  API key generated and saved to: $E2B_LITE_DATA_DIR/api-key.txt"
+else
+    echo "  ⚠  API key generation failed - run 'make seed-db' in packages/shared"
+fi
 echo "  ⚠  Database password: postgres (change for production!)"
 echo ""
 echo -e "${BOLD}${CYAN}📝 Installation Log${NC}"
@@ -992,4 +1058,8 @@ log "  - envd binary: $E2B_LITE_DATA_DIR/envd/envd"
 log ""
 log "Data directory: $E2B_LITE_DATA_DIR"
 log "Repository: $E2B_LITE_DIR"
+if [ -n "$E2B_LITE_API_KEY" ]; then
+    log "API Key: $E2B_LITE_API_KEY"
+    log "API Key file: $E2B_LITE_DATA_DIR/api-key.txt"
+fi
 log "============================================================"
